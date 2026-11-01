@@ -15,7 +15,7 @@ class DatabaseConnection {
   private pgPool: pg.Pool | null = null;
   private sqliteDb: SqlJsDatabase | null = null;
   private dbPath: string;
-  private activeMode: 'postgres' | 'sqlite' = 'sqlite';
+  private activeMode: 'postgres' | 'sqlite' | 'uninitialized' = 'uninitialized';
   private initialized = false;
 
   constructor() {
@@ -25,11 +25,49 @@ class DatabaseConnection {
   async init(): Promise<void> {
     if (this.initialized) return;
 
-    if (config.dbClient === 'postgres') {
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    // Strict Production Enforcement: Must use PostgreSQL / Supabase; no fallback allowed
+    if (isProduction) {
+      if (!config.databaseUrl) {
+        throw new Error(
+          'FATAL: DATABASE_URL environment variable is required in production mode. ' +
+          'SQLite fallback is strictly prohibited in production.'
+        );
+      }
+
+      console.log('[DATABASE] Initializing production PostgreSQL connection pool...');
       try {
-        console.log(`[DATABASE] Attempting connection to PostgreSQL at ${config.databaseUrl}...`);
         this.pgPool = new Pool({
           connectionString: config.databaseUrl,
+          ssl: { rejectUnauthorized: false },
+          connectionTimeoutMillis: 10000,
+        });
+
+        // Test connection
+        const client = await this.pgPool.connect();
+        client.release();
+        this.activeMode = 'postgres';
+        this.initialized = true;
+        console.log('✅ [DATABASE] Successfully connected to production PostgreSQL database.');
+        return;
+      } catch (err: any) {
+        console.error('❌ [DATABASE] FATAL: Production PostgreSQL connection failed:', err.message);
+        throw new Error(
+          `FATAL: Production database connection failed: ${err.message}. ` +
+          'Falling back to SQLite in production is strictly prohibited.'
+        );
+      }
+    }
+
+    // Development Mode: Connect to PostgreSQL if requested, otherwise fallback to SQLite
+    if (config.dbClient === 'postgres' && config.databaseUrl) {
+      try {
+        console.log(`[DATABASE] Attempting connection to PostgreSQL at ${config.databaseUrl}...`);
+        const useSsl = config.databaseUrl.includes('supabase') || config.databaseUrl.includes('sslmode=require');
+        this.pgPool = new Pool({
+          connectionString: config.databaseUrl,
+          ssl: useSsl ? { rejectUnauthorized: false } : undefined,
           connectionTimeoutMillis: 3000,
         });
 
@@ -37,16 +75,16 @@ class DatabaseConnection {
         const client = await this.pgPool.connect();
         client.release();
         this.activeMode = 'postgres';
-        console.log('✅ [DATABASE] Successfully connected to PostgreSQL (Production Mode).');
+        console.log('✅ [DATABASE] Successfully connected to PostgreSQL (Development Mode).');
         this.initialized = true;
         return;
       } catch (err: any) {
-        console.warn('⚠️ [DATABASE] PostgreSQL connection failed:', err.message);
+        console.warn('⚠️ [DATABASE] PostgreSQL connection failed in development:', err.message);
         console.warn('⚠️ [DATABASE] Switching to SQLite WebAssembly Development Fallback Mode as requested.');
       }
     }
 
-    // Initialize SQLite (sql.js)
+    // Initialize SQLite (sql.js) for local development
     try {
       const SQL = await initSqlJs();
       if (fs.existsSync(this.dbPath)) {
@@ -75,7 +113,7 @@ class DatabaseConnection {
     }
   }
 
-  getMode(): 'postgres' | 'sqlite' {
+  getMode(): 'postgres' | 'sqlite' | 'uninitialized' {
     return this.activeMode;
   }
 

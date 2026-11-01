@@ -28,8 +28,8 @@
 - **Transfusion Compatibility Reference**:
   - Automatically matches declared ABO/Rh types and component requirements (Whole Blood, PRBC, Platelets, FFP).
 - **Dual-Mode Database Architecture**:
-  - **Production Mode**: Full PostgreSQL with PostGIS geospatial indexing support (`schema.sql`).
-  - **Development Fallback Mode**: Embedded SQLite WebAssembly with zero C++ compilation dependencies, ensuring instantaneous 100% out-of-the-box demonstration on any machine.
+  - **Production Mode**: Managed Supabase PostgreSQL (v15+) with native PostGIS spatial indexing (`supabase/migrations/20261101000000_supabase_production_schema.sql`), Row Level Security (RLS) on all exposed tables, and RPC stored procedures.
+  - **Development Mode**: Embedded SQLite WebAssembly with zero C++ compilation dependencies, ensuring instantaneous out-of-the-box local demonstration. Production mode strictly requires `DATABASE_URL` and never falls back to SQLite.
 - **Privacy by Design**:
   - Donors' exact home coordinates are masked; only locality name and distance in km are revealed.
 - **1-Click Academic Evaluation Mode**:
@@ -87,6 +87,23 @@ Open your browser at **`http://localhost:3000`**.
 
 ---
 
+## 🗄️ Supabase Production Database Setup
+
+To provision the production PostgreSQL + PostGIS database on Supabase:
+
+1. **Create Supabase Project:**
+   - Log into [supabase.com](https://supabase.com) and create a project in region `ap-south-1` (Mumbai, India).
+2. **Apply Database Migration:**
+   - Open **Supabase SQL Editor** $\to$ **New query**.
+   - Copy and execute `supabase/migrations/20261101000000_supabase_production_schema.sql`.
+   - This provisions all 13 relational tables, PostGIS geography points, RLS policies, and RPC matching functions.
+3. **Configure Environment Variables:**
+   - Set `DATABASE_URL` in your server environment to the Supabase connection string (Port 6543 Transaction Pooler recommended).
+   - Set `JWT_SECRET` to your Supabase Project JWT Secret (from Project Settings $\to$ API $\to$ JWT Settings).
+   - Set `DB_CLIENT=postgres` and `NODE_ENV=production`.
+
+---
+
 ## 📂 Project Structure
 
 ```
@@ -106,6 +123,8 @@ Blood_Link/
 │   │   ├── db/                 # Dual-Mode Connection, Schema, Seeds
 │   │   └── index.ts            # Server Entry & Health Check
 │   └── package.json
+├── supabase/                   # Supabase Database Migrations & Schemas
+│   └── migrations/             # 20261101000000_supabase_production_schema.sql
 ├── docs/                       # Academic Capstone Documentation
 │   ├── SRS.md                  # Software Requirements Specification
 │   ├── ARCHITECTURE.md         # Technical Architecture & Haversine Formula

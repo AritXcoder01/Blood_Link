@@ -21,8 +21,13 @@ export function authenticate(req: AuthenticatedRequest, res: Response, next: Nex
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, config.jwtSecret) as AuthPayload;
-    req.user = decoded;
+    const decoded = jwt.verify(token, config.jwtSecret) as any;
+    req.user = {
+      userId: decoded.userId || decoded.sub,
+      email: decoded.email,
+      role: decoded.app_metadata?.role || decoded.role || 'requester',
+      fullName: decoded.fullName || decoded.user_metadata?.full_name || decoded.user_metadata?.name || '',
+    };
     next();
   } catch (err: any) {
     res.status(401).json({

@@ -90,19 +90,63 @@ The Blood_Link database architecture contains **13 structured relational tables*
 
 ---
 
-## 3. PostGIS Production Integration Note
+## 3. Supabase Production PostgreSQL & PostGIS Integration
 
-For deployment on PostgreSQL with PostGIS installed, geographical coordinates can be queried directly using spatial index operators:
+The production database is managed via Supabase PostgreSQL (v15+) with native PostGIS extensions and Row Level Security (RLS).
 
-```sql
--- Spatial Point generation
-ALTER TABLE locations ADD COLUMN geom geometry(Point, 4326);
-UPDATE locations SET geom = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326);
-CREATE INDEX idx_locations_geom ON locations USING GIST(geom);
+### 3.1 Migration Source
+The complete production schema is version-controlled at:
+`supabase/migrations/20261101000000_supabase_production_schema.sql`
 
--- Progressive radius scan using ST_DWithin (distance in meters)
-SELECT dp.*, ST_Distance(l.geom, ST_SetSRID(ST_MakePoint(:reqLng, :reqLat), 4326)::geography) / 1000.0 as distance_km
-FROM donor_profiles dp
-JOIN locations l ON l.entity_id = dp.id AND l.entity_type = 'donor'
-WHERE ST_DWithin(l.geom::geography, ST_SetSRID(ST_MakePoint(:reqLng, :reqLat), 4326)::geography, 5000);
-```
+### 3.2 Authentication & Entity Mapping
+- **Identity Provider**: Supabase Auth (`auth.users`).
+- **Application Profiles**: `public.profiles` (`id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE`).
+- **Compatibility Layer**: `public.users` SQL view maps `profiles` to preserve existing application query compatibility.
+- **Privilege Protection**: The trigger `trg_prevent_admin_escalation` on `public.profiles` prevents non-administrators from self-assigning the `'admin'` role.
+
+### 3.3 PostGIS Spatial Architecture
+Locations, hospitals, and blood requests maintain a native PostGIS `extensions.geography(Point, 4326)` column (`geom`):
+- Automatically updated on insert/update via trigger `fn_populate_geom()`.
+- Indexed via spatial GiST indexes (`CREATE INDEX ... USING GIST(geom)`).
+
+### 3.4 Progressive Matching RPC (`match_potential_donors`)
+- Executes in-database proximity queries via `extensions.ST_DWithin` and `extensions.ST_Distance`.
+- **Safety Gate**: Verifies that blood request status is `VERIFIED` or `SEARCHING` before discovery.
+- **Privacy Gate**: Raw home coordinates of donors are strictly excluded from output; only locality centroid, district, distance, and tier are returned.
+- **Permission Hardening**: Default `EXECUTE` privileges are revoked from `PUBLIC` and `anon`; execution is granted only to `authenticated` and `service_role`.
+
+### 3.5 Donor Match Response RPC (`respond_to_donor_match`)
+- Authenticated donors accept or decline emergency matches.
+- Validates donor ownership (`dp.user_id = auth.uid()`), parameter values (`ACCEPTED`, `DECLINED`), and note lengths ($\le 500$ chars).
+- Automatically updates blood request status to `DONOR_RESPONSES` upon acceptance.
+- Revokes permissions from `PUBLIC` and `anon`.
+
+### 3.6 Row Level Security (RLS) Policy Matrix
+
+| Table | SELECT | INSERT | UPDATE | DELETE |
+| :--- | :--- | :--- | :--- | :--- |
+| `profiles` | Own profile or Admin | Own profile / Auth trigger | Own profile or Admin | Admin |
+| `donor_profiles` | Own profile or Admin | Own profile | Own profile or Admin | Admin |
+| `requester_profiles`| Own profile or Admin | Own profile | Own profile or Admin | Admin |
+| `locations` | Own locations or Admin (Hospitals public) | Own locations | Own locations or Admin | Admin |
+| `health_questionnaires` | Own questionnaire only | Own questionnaire | Own questionnaire | Admin |
+| `donation_history` | Own donation records | Own records | Own records | Admin |
+| `hospitals` | Public (Verified hospitals) | Admin | Admin | Admin |
+| `blood_requests` | Own requests, Matched Donors, or Admin | Own request (`PENDING_VERIFICATION`) | Own request or Admin | Admin |
+| `donor_matches` | Own donor match or Requester (if ACCEPTED) | Service-role / Engine | Own match (via RPC) | Admin |
+| `notifications` | Own user notifications | Service-role / Engine | Own notifications | Own |
+| `device_tokens` | Own tokens | Own tokens | Own tokens | Own |
+| `otp_verifications` | **REVOKED** (Service-role only) | Service-role only | Service-role only | Service-role |
+| `admin_audit_logs` | Admin only | Service-role / Triggers | **DENIED** (Immutable) | **DENIED** |
+
+---
+
+## 4. Dual-Mode Database Connection Protocol
+
+- **Development (`NODE_ENV=development`)**:
+  - Connects to embedded SQLite (`blood_link.db`) via `sql.js`.
+  - Zero cloud dependencies required; pre-seeded evaluator accounts operate locally.
+- **Production (`NODE_ENV=production`)**:
+  - Requires `DATABASE_URL` pointing to Supabase Managed PostgreSQL.
+  - SSL enabled (`rejectUnauthorized: false`).
+  - **Zero Silent Fallback**: If `DATABASE_URL` is missing or connection fails, the server halts immediately with a fatal startup exception. Falling back to SQLite in production is strictly prohibited.

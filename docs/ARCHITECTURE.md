@@ -35,7 +35,11 @@
                                       v
        +-------------------------------------------------------------+
        |                   DUAL-MODE DATABASE LAYER                  |
-       |  - Production: PostgreSQL + PostGIS (Production Target)     |
+       |  - Production: Supabase Managed PostgreSQL (v15+) + PostGIS |
+       |    * Row Level Security (RLS) on all exposed tables         |
+       |    * PostGIS ST_DWithin & ST_Distance Spatial Indexing      |
+       |    * Supabase Auth Synchronization & JWT Role Guard         |
+       |    * Migration: supabase/migrations/20261101000000_*.sql    |
        |  - Local Dev Fallback: SQLite WebAssembly (Zero-Config)     |
        +-------------------------------------------------------------+
 ```
@@ -187,8 +191,11 @@ Where:
    - Currently operating in an explicit, clearly labelled **Demonstration Mode**. In production, Twilio credentials and Firebase Cloud Messaging API keys can be supplied via `.env`.
 2. **Maps Integration**:
    - Operating in Demo Mode using **OpenStreetMap/Leaflet**. If a Google Maps API key is provided, the application switches to Google Maps.
-3. **Database Portability**:
-   - Running in zero-config **SQLite WebAssembly Fallback Mode** for seamless demonstration. Production deployments connect to **PostgreSQL with PostGIS** via standard `DATABASE_URL`.
+3. **Database Architecture & Supabase Production Strategy**:
+   - Running in zero-config **SQLite WebAssembly Fallback Mode** for seamless, out-of-the-box local academic demonstration.
+   - Production deployments connect to **Supabase Managed PostgreSQL with PostGIS** via standard `DATABASE_URL` (Port 6543 Transaction Pooler).
+   - Production mode strictly enforces database configuration: if `DATABASE_URL` is omitted or invalid, the backend terminates immediately and **never silently falls back to SQLite**.
+   - Database migrations are version-controlled in `supabase/migrations/20261101000000_supabase_production_schema.sql` with comprehensive RLS and RPC procedures.
 
 ### Future Enhancements
 - Live GPS tracking for mobile blood donation transport vans.
